@@ -50,7 +50,7 @@
 #define ADC_MAX 4096.0
 #define V_BAT_MIN 3.2 //Tensión mínima de la batería para que no se estropee
 #define V_BAT_MAX 4.2 //Tensión máxima de la batería
-#define batBaja 15.0
+#define batBaja 15.0  //Nivel definido como batería baja
 
 //Pulso y  Presión arterial
 #define TASA_PPG 800 //Número de muestras por segundo (siendo "muestra" los 3 bytes del conjunto de todos los LEDs)
@@ -166,7 +166,7 @@ uint32_t tiempoInicio =0;
 uint32_t estresMedido;
 
 //Alcohol
-uint16_t alcoholMax = 0;
+uint32_t alcoholMax = 0;
 float nivelAlcohol;
 
 //Alarma
@@ -236,6 +236,7 @@ int main(void)
 //Calentar sensor alcohol
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
 
+  //Se configura el sensor de la fotoplestimografía
   inicializarPPG(POT_LEDS_PPG, NUM_MUESTRAS_MEDIA_PPG, MODO_LEDS_PPG, TASA_PPG, ANCHO_PULSO_PPG, RANGO_ADC_PPG, AMPLI_ROJO_PPG, AMPLI_IR_PPG, AMPLI_VERDE_PPG);
 
   fsm_t* fsm_medidas = fsm_new_medidas();
@@ -323,12 +324,12 @@ void inicializarPPG(uint8_t potenciaLED, uint8_t mediaMuestras, uint8_t modoLEDs
 	MAX30101_setPulseAmplitudeRed(amplitudRojo); //Turn Red LED to low to indicate sensor is running
 	MAX30101_setPulseAmplitudeIR(amplitudIR); //Turn off IR LED
 	MAX30101_setPulseAmplitudeGreen(amplitudVerde); //Turn off Green LED
-	MAX30101_enableDIETEMPRDY();
 }
 
 
 //Funciones de comprobación Medidas de parámetros
 
+//Se comprueba si es la primera vez que se ejecuta el bucle
 static int tiempoNoIniciado (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerMedidas == 0){
@@ -337,6 +338,7 @@ static int tiempoNoIniciado (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si no es la primera vez que se ejecuta el bucle
 static int tiempoIniciado (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerMedidas != 0){
@@ -345,6 +347,7 @@ static int tiempoIniciado (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se tiene que seguir midiendo el parámetro
 static int timpoNoAcabado (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerMedidas > HAL_GetTick()){
@@ -353,6 +356,7 @@ static int timpoNoAcabado (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si no se tiene que seguir midiendo el parámetro
 static int finTiempo (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerMedidas <= HAL_GetTick()){
@@ -361,6 +365,7 @@ static int finTiempo (fsm_t* this) {
 	return ret;
 }
 
+//Se pasa al siguiente estado
 static int siguienteEstado (fsm_t* this) {
 	uint8_t ret= 1;
 	return ret;
@@ -368,42 +373,55 @@ static int siguienteEstado (fsm_t* this) {
 
 //Funciones de transición
 
+//Se calcula el nivel de batería
 void calculoBateria(fsm_t* this){
 	float tension_bat = 0.0;
+
 	tension_bat = 2*(((float)adc[0])/ADC_MAX)*V_REF;  //Porque los ADCs son de 12 bits (4096) que marcan los 3,3V (Vcc del micro, la referencia) y 2 porque el divisor hace que midas la mitad de la tensión Vin_bat
 	nivel_bateria = (((tension_bat - V_BAT_MIN)/(V_BAT_MAX - V_BAT_MIN))*100);
-	timerMedidas = timerMedidas +30000;
+	if(timerMedidas == 0){
+		//Se inicializa el timer con el tiempo de medida del pulso
+		timerMedidas = timerMedidas +20000;
+	}
 }
 
+//Se mide el pulso
 void medirPulso(fsm_t* this){
 	static uint32_t lastBeat; //Time at which the last beat occurred
 	float beatsPerMinute;
 	uint32_t irValue;
-	irValue = MAX30101_getIR();  //Provoca una nueva recogida de datos de todos los LEDs que se hayan configurado como encendidos. El IR es el que mejor coge el pulso
+	irValue = MAX30101_getIR();  //Provoca una nueva recogida de datos del led de IR
 
+	//Si se ha obtenido un valor del sensor
 	if( irValue != 0){
+		//Se compruba si se ha producido un latido
 		if ( MAX30101_checkForBeat(irValue) == 1){
-			//We sensed a beat!
+			//Se ha detectado un latido
 			int delta = HAL_GetTick() - lastBeat;
 			lastBeat = HAL_GetTick();
 			beatsPerMinute = 60 / (delta / 1000.0);
+			//Si el caluculo del pulso se encuentra dentro de un rango posible
 			if((beatsPerMinute < 255) &( beatsPerMinute > 40 )& (countRates< 20)){
-			  rates[countRates] = (uint8_t)beatsPerMinute; //Store this reading in the array
+			  rates[countRates] = (uint8_t)beatsPerMinute; //Se guarda el pulso en el array
 			  countRates ++;
 			}
 		}
 	}
 }
 
+//Se calcula el pulso la primera vez que se enciende el dispositivo
 void calculoPulsoInicio(fsm_t* this){
 	for (int i = 2;i<countRates;i++){
 		pulsosMedia = pulsosMedia + rates[i];
 	}
 	pulsosMedia = pulsosMedia/(countRates-2);
 	countRates = 0;
-	timerMedidas = timerMedidas + 30000;
+	//Se inicializa el timer con el tiempo de medida de la presión
+	timerMedidas = timerMedidas + 20000;
+
 }
 
+//Se calcula el pulso
 void calculoPulso(fsm_t* this){
 	float pulsaciones = 0;
 	for (int i = 2;i<countRates;i++){
@@ -423,37 +441,42 @@ void calculoPulso(fsm_t* this){
 	}
 }
 
+//Se mide la presión
 void medirPresion(fsm_t* this){
 	int32_t irValue;
 	static uint8_t p;
-	for(uint8_t t =0;t< 100;t++ ){
-		HAL_Delay(10);
-		irValue = MAX30101_getIR();  //Provoca una nueva recogida de datos de todos los LEDs que se hayan configurado como encendidos. El IR es el que mejor coge el pulso
+	for(int i= 0; i<1000;i++){
+		irValue = MAX30101_getIR();  //Provoca una nueva recogida de datos del led de IR
 		if( irValue != 0){
+			//Se recogen los datos necesarios para calcular la presión
 			if ( MAX30101_checkForBP(irValue, tiemposPPG) == 1){
-				//We sensed a beat!
 				ST[p]= tiemposPPG[1]-tiemposPPG[0];
 				T1[p] = tiemposPPG[2] -tiemposPPG[1];
 				maxBPTiempo[p] = 12.84 +0.78*((float)T1[p])/5 + 2.296*((float)ST[p])/5 ;
 				minBPTiempo[p] = -5 +1.224*(float)T1[p]/5 + 0.534* (float)ST[p]/5 ;
+				//Si el valor almacenado esta dentro de un rango posible se guarda
 				if(((maxBPTiempo[p]>70.0 ) )&(minBPTiempo[p]> 40.0)){
 					p++;
+
 				}
 			}
 		}
 	}
 }
 
+//Se calcula la presión
 void calculoPresion(fsm_t* this){
+	//Se hace vibrar la puslera para indiciar al usuario que debe empezar a soplar
 	for(uint i = 0;i<8;i++){
 		HAL_GPIO_TogglePin(GPIOA,  GPIO_PIN_8);
 		HAL_Delay(100);
 	}
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET);
+
 	float maxBpMedia = 0.0;
 	float minBpMedia = 0.0;
 	uint8_t i = 0;
-	while(minBPTiempo[i]!=0){
+	while(minBPTiempo[i]!=0 && i != 20){
 		maxBpMedia= maxBpMedia + maxBPTiempo[i];
 		minBpMedia = minBpMedia + minBPTiempo[i];
 		i++;
@@ -463,7 +486,7 @@ void calculoPresion(fsm_t* this){
 	float desviacionMaxBpMedia = 0.0;
 	float desviacionMinBpMedia = 0.0;
 	i =0;
-	while(minBPTiempo[i]!=0){
+	while(minBPTiempo[i]!=0 && i != 20){
 		desviacionMaxBpMedia = desviacionMaxBpMedia + fabs( maxBPTiempo[i] - maxBpMedia);
 		desviacionMinBpMedia = desviacionMinBpMedia + fabs( minBPTiempo[i] - minBpMedia);
 		i++;
@@ -473,7 +496,7 @@ void calculoPresion(fsm_t* this){
 	i=0;
 	uint8_t bpCountMax = 0;
 	uint8_t bpCountMin = 0;
-	while(minBPTiempo[i]!=0){
+	while(minBPTiempo[i]!=0 && i != 20){
 		if((maxBPTiempo[i] <=(maxBpMedia + desviacionMaxBpMedia )) & (maxBPTiempo[i] >=(maxBpMedia - desviacionMaxBpMedia))){
 			maxBp = maxBp + maxBPTiempo[i];
 			bpCountMax ++;
@@ -486,18 +509,22 @@ void calculoPresion(fsm_t* this){
 	}
 	maxBp = maxBp / bpCountMax;
 	minBp = minBp /bpCountMin;
-	timerMedidas = timerMedidas + 30000;
+	//Se inicializa el timer con el tiempo de medida del nivel de alcohol
+	timerMedidas = timerMedidas + 20000;
 }
 
+//Se mide el nivel de alcohol
 void medirAlcohol(fsm_t* this){
 	HAL_ADC_Start_DMA (&hadc1, adc,3);
 	uint16_t alcohol;
 	alcohol = adc[1];
+	//Se almacena el valor máximo
 	if(alcohol>alcoholMax){
 		alcoholMax = alcohol;
 	}
 }
 
+//Se calcula el nivel de alcohol
 void calculoAlcohol(fsm_t* this){
 	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
 	float vrl = ((float)alcoholMax *3.3)/4096;
@@ -521,8 +548,10 @@ void calculoAlcohol(fsm_t* this){
 		}
 }
 
+//Se calcula la temperatura
 void calculoTemp(fsm_t* this){
-	if((HAL_GetTick()- tiempoInicio) > 54000){
+	//No se realiza la medida si el tiempo es menor de 9 minutos
+	if((HAL_GetTick()- tiempoInicio) > 540000){
 		uint8_t bufferTemp[2];  //Buffer de datos a enviar y leer por I2C
 		bufferTemp[0] = 0x01; //Dirección de registro de configuración
 		bufferTemp[1] = 0x00; //Contenido a enviar al registro de configuración
@@ -538,9 +567,11 @@ void calculoTemp(fsm_t* this){
 	}
 }
 
+//Se calcula el estrés
 void calculoEstres(fsm_t* this){
 	HAL_ADC_Start_DMA (&hadc1, adc,3);
 	estresMedido = adc[2];
+	//Se inicializa el timer con el tiempo de medida del pulso
 	timerMedidas = timerMedidas +10000;
 }
 
@@ -566,6 +597,7 @@ fsm_t* fsm_new_medidas ()
 
 //Funciones de comprobación Alarma
 
+//Se comprueba si tiene que seguir vibrando la pulsera
 static int timpoNoAcabadoAlarma (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerAlarma > HAL_GetTick()){
@@ -574,6 +606,7 @@ static int timpoNoAcabadoAlarma (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si no tiene que seguir vibrando la pulsera
 static int finTiempoAlarma (fsm_t* this) {
 	uint8_t ret= 0;
 	if(timerAlarma <= HAL_GetTick()){
@@ -582,6 +615,7 @@ static int finTiempoAlarma (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si el nivel de bateria es inferior al 15%
 static int bateriaBaja (fsm_t* this) {
 	uint8_t ret= 0;
 	if(((nivel_bateria <= batBaja) & (nivel_bateria >0)) & (avisoBat == 0)){
@@ -590,6 +624,7 @@ static int bateriaBaja (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se detecta la presión arterial fuera de un rango saludable
 static int presionAnomala (fsm_t* this) {
 	uint8_t ret= 0;
 	if((((maxBp <= maxBpBajo )& ( maxBp>0))||(maxBp >= maxBpAlto) || ((minBp <= minBpBajo) & (minBp>0))||(minBp >= minBpAlto)) & (avisoPresion == 0) ){
@@ -598,6 +633,7 @@ static int presionAnomala (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se detecta la temperatura fuera de un rango saludable
 static int temperaturaAnomala (fsm_t* this) {
 	uint8_t ret= 0;
 	if((((temp <= tempHipotermia) &( temp>0)) ||(temp >= tempFiebre)) & ( avisoTemp== 0)){
@@ -606,6 +642,7 @@ static int temperaturaAnomala (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se detecta el pulso fuera de un rango saludable
 static int pulsoAnomalo (fsm_t* this) {
 	uint8_t ret= 0;
 	if((((pulsosMedia <= pulsoBajo) &( pulsosMedia>0) )||pulsosMedia >= pulsoAlto)& (avisoPulso == 0) ){
@@ -614,6 +651,7 @@ static int pulsoAnomalo (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se detecta el nivel de estrés elevado
 static int estresAlto (fsm_t* this) {
 	uint8_t ret= 0;
 	if((estresMedido <= estresElevado) & (avisoEstresAlto == 0) & (estresMedido >0)){
@@ -622,6 +660,7 @@ static int estresAlto (fsm_t* this) {
 	return ret;
 }
 
+//Se comprueba si se detecta el nivel de alcohol elevado
 static int alcoholAlto (fsm_t* this) {
 	uint8_t ret= 0;
 	if(nivelAlcohol >= alcoholElevado){
@@ -632,34 +671,41 @@ static int alcoholAlto (fsm_t* this) {
 
 //Funciones de transición Alarma
 
+//Se inicializa el timer con la duración de la vibración para la batería
 void inicioTimerBateria(fsm_t* this){
 	timerAlarma = HAL_GetTick() + tiempoAlarmaBateria;
 	avisoBat = 1;
 }
 
+//Se inicializa el timer con la duración de la vibración para la presión
 void inicioTimerPresion(fsm_t* this){
 	timerAlarma = HAL_GetTick() + tiempoAlarmaPresion;
 	avisoPresion = 1;
 }
 
+//Se inicializa el timer con la duración de la vibración para la temperatura
 void inicioTimerTemperatura(fsm_t* this){
 	timerAlarma = HAL_GetTick() + tiempoAlarmaTemperatura;
 	avisoTemp = 1;
 }
 
+//Se inicializa el timer con la duración de la vibración para el estrés
 void inicioTimerEstres(fsm_t* this){
 	timerAlarma = HAL_GetTick() + tiempoAlarmaEstres;
 	avisoEstresAlto = 1;
 }
 
+//Se inicializa el timer con la duración de la vibración para el alcohol
 void inicioTimerAlcohol(fsm_t* this){
 	timerAlarma= HAL_GetTick() + tiempoAlarmaAlcohol;
 }
 
+//Se hace vibrar el motor
 void aviso(fsm_t* this){
 	HAL_GPIO_TogglePin(GPIOA,  GPIO_PIN_8);
 }
 
+//Se realiza el aviso por el pulso
 void avisoPulsaciones(fsm_t* this){
 	for(uint8_t i= 0; i< 25; i++){
 		HAL_GPIO_TogglePin(GPIOA,  GPIO_PIN_8);
@@ -669,6 +715,7 @@ void avisoPulsaciones(fsm_t* this){
 	avisoPulso = 1;
 }
 
+//Se asegura que se para la vibración
 void alarmaFin(fsm_t* this){
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_RESET); //Para asegurar que no se quede vibrando
 }
