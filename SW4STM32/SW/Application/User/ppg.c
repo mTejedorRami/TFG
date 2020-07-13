@@ -20,7 +20,7 @@ int16_t IR_Average_Estimated;
 uint32_t IR_Time_Previous=0;
 uint32_t IR_Time_Current=0;
 
-uint16_t i = 1;
+uint32_t i = 1;
 //1 pendiente positiva 0 negativa
 uint8_t pendiente = 0;
 uint8_t pendienteAnterior = 0;
@@ -185,8 +185,6 @@ uint8_t MAX30101_checkForBeat(int32_t sample)
   IR_Average_Estimated = MAX30101_averageDCEstimator(&ir_avg_reg, sample);
   IR_AC_Signal_Current = MAX30101_lowPassFIRFilter(sample - IR_Average_Estimated);
 
-
-  i++;
   //  Detect positive zero crossing (rising edge)
   if ((IR_AC_Signal_Previous < 0) & (IR_AC_Signal_Current >= 0))
   {
